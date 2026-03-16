@@ -1,5 +1,12 @@
 # Changelog
 
+## [12.0.1](https://github.com/workadventure/simple-peer/compare/v12.0.0...v12.0.1) (2026-03-16)
+
+
+### Bug Fixes
+
+* Allow readding removed streams/tracks ([a2955ae](https://github.com/workadventure/simple-peer/commit/a2955aef24724bba1d673697564aca87b541a55d))
+
 ## [12.0.0](https://github.com/workadventure/simple-peer/compare/v11.0.2...v12.0.0) (2026-01-22)
 
 
