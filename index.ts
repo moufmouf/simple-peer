@@ -137,8 +137,6 @@ class Peer extends Lite {
         this._setPreferredCodecs(track.kind, this._getTransceiverForSender(sender))
       }
       this._needsNegotiation()
-    } else if ((sender as RTCRtpSender & { removed?: boolean }).removed) {
-      throw errCode(new Error('Track has been removed. You should enable/disable tracks that you want to re-add.'), 'ERR_SENDER_REMOVED')
     } else {
       throw errCode(new Error('Track has already been added to that stream.'), 'ERR_SENDER_ALREADY_ADDED')
     }
@@ -180,7 +178,7 @@ class Peer extends Lite {
       throw errCode(new Error('Cannot remove track that was never added.'), 'ERR_TRACK_NOT_ADDED')
     }
     try {
-      (sender as RTCRtpSender & { removed?: boolean }).removed = true
+      submap?.delete(stream);
       this._pc!.removeTrack(sender)
     } catch (err) {
       if ((err as Error).name === 'NS_ERROR_UNEXPECTED') {
