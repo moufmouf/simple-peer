@@ -1,5 +1,12 @@
 # Changelog
 
+## [12.1.0](https://github.com/workadventure/simple-peer/compare/v12.0.1...v12.1.0) (2026-09-10)
+
+
+### Features
+
+* receive-side codec preferences with an exclusive mode, applied before the answer too ([994aad7](https://github.com/workadventure/simple-peer/commit/994aad784bee1eea01111e6a6a93166c5420eebf))
+
 ## [12.0.1](https://github.com/workadventure/simple-peer/compare/v12.0.0...v12.0.1) (2026-03-16)
 
 
