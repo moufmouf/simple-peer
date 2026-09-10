@@ -1,15 +1,75 @@
 /*! simple-peer. MIT License. Feross Aboukhadijeh <https://feross.org/opensource> */
 import Lite, { PeerLiteOptions } from './lite.js'
 import errCode from 'err-code'
-import { MediaStream, MediaStreamTrack, RTCRtpSender, RTCRtpTransceiver } from 'webrtc-polyfill'
+import { MediaStream, MediaStreamTrack, RTCRtpReceiver, RTCRtpTransceiver } from 'webrtc-polyfill'
+
+/**
+ * Codecs a peer prefers to receive for one kind of media, best first ('video/VP9', or just 'VP9').
+ */
+interface CodecPreference {
+  prefer: string[]
+  /**
+   * Negotiate only the preferred codecs (plus rtx/red/ulpfec). For a browser that cannot choose its own send codec:
+   * the remote then has nothing else to send us, and we have nothing else to send it.
+   */
+  exclusive?: boolean
+}
 
 interface PreferredCodecs {
-  video?: string[]
-  audio?: string[]
+  video?: string[] | CodecPreference
+  audio?: string[] | CodecPreference
 }
 
 interface PeerOptions extends PeerLiteOptions {
+  /**
+   * Codecs this peer prefers to RECEIVE, per kind, applied with RTCRtpTransceiver.setCodecPreferences(). They
+   * drive what the remote peer sends us. What we send is chosen by the remote's preference, or by
+   * RTCRtpEncodingParameters.codec on browsers that support it.
+   */
+  receiveCodecs?: PreferredCodecs
+  /** @deprecated Alias of receiveCodecs. The name suggested the opposite of what it does. */
   preferredCodecs?: PreferredCodecs
+}
+
+const AUXILIARY_CODEC_SUFFIXES = ['/rtx', '/red', '/ulpfec']
+
+function isAuxiliaryCodec (codec: RTCRtpCodecCapability): boolean {
+  const mime = codec.mimeType?.toLowerCase() ?? ''
+  return AUXILIARY_CODEC_SUFFIXES.some(suffix => mime.endsWith(suffix))
+}
+
+/**
+ * Orders the codecs a receiver is capable of after a preference: the preferred codecs first, in that order, then
+ * either every other codec (default) or only the auxiliary rtx/red/ulpfec entries (exclusive). A preference matching
+ * nothing keeps every codec, so the call still negotiates.
+ */
+export function orderCodecPreferences (capabilities: RTCRtpCodecCapability[], preference: string[] | CodecPreference): RTCRtpCodecCapability[] {
+  const preferred = Array.isArray(preference) ? preference : preference.prefer
+  const exclusive = !Array.isArray(preference) && preference.exclusive === true
+  const normalized = preferred.map(codec => codec.toLowerCase())
+  const ordered: RTCRtpCodecCapability[] = []
+  const used = new Set<number>()
+
+  normalized.forEach(pref => {
+    const prefIsFull = pref.includes('/')
+    capabilities.forEach((codec, index) => {
+      if (used.has(index)) return
+      const mime = codec.mimeType?.toLowerCase()
+      if (!mime || isAuxiliaryCodec(codec)) return
+      if (prefIsFull ? mime === pref : mime.endsWith('/' + pref)) {
+        used.add(index)
+        ordered.push(codec)
+      }
+    })
+  })
+
+  const keepOthers = !exclusive || ordered.length === 0
+  capabilities.forEach((codec, index) => {
+    if (used.has(index)) return
+    if (keepOthers || isAuxiliaryCodec(codec)) ordered.push(codec)
+  })
+
+  return ordered
 }
 
 /**
@@ -19,6 +79,8 @@ interface PeerOptions extends PeerLiteOptions {
 class Peer extends Lite {
   streams: MediaStream[]
   _senderMap: WeakMap<MediaStreamTrack, WeakMap<MediaStream, RTCRtpSender>>
+  receiveCodecs?: PreferredCodecs
+  /** @deprecated Alias of receiveCodecs. */
   preferredCodecs?: PreferredCodecs
 
   constructor (opts: PeerOptions = {}) {
@@ -27,7 +89,8 @@ class Peer extends Lite {
 
     this.streams = opts.streams || (opts.stream ? [opts.stream] : []) // support old "stream" option
     this._senderMap = new WeakMap()
-    this.preferredCodecs = opts.preferredCodecs
+    this.receiveCodecs = opts.receiveCodecs ?? opts.preferredCodecs
+    this.preferredCodecs = this.receiveCodecs
 
     if (this.streams) {
       this.streams.forEach(stream => {
@@ -40,38 +103,29 @@ class Peer extends Lite {
   }
 
   _setPreferredCodecs (kind: 'audio' | 'video', transceiver: RTCRtpTransceiver | null): void {
-    const preferred = this.preferredCodecs?.[kind]
-    if (!preferred || preferred.length === 0) return
+    const preference = this.receiveCodecs?.[kind]
+    if (!preference) return
+    if ((Array.isArray(preference) ? preference : preference.prefer).length === 0) return
     if (!transceiver?.setCodecPreferences) return
-    if (typeof RTCRtpSender.getCapabilities !== 'function') return
+    // setCodecPreferences() takes receiver capabilities: a browser may decode codecs it cannot encode
+    if (typeof RTCRtpReceiver === 'undefined' || typeof RTCRtpReceiver.getCapabilities !== 'function') return
 
-    const capabilities = RTCRtpSender.getCapabilities(kind)
+    const capabilities = RTCRtpReceiver.getCapabilities(kind)
     if (!capabilities?.codecs?.length) return
 
-    const normalized = preferred.map(codec => codec.toLowerCase())
-    const ordered: RTCRtpCodecCapability[] = []
-    const used = new Set<number>()
+    transceiver.setCodecPreferences(orderCodecPreferences(capabilities.codecs, preference))
+  }
 
-    normalized.forEach(pref => {
-      const prefIsFull = pref.includes('/')
-      capabilities.codecs.forEach((codec, index) => {
-        if (used.has(index)) return
-        const mime = codec.mimeType?.toLowerCase()
-        if (!mime) return
-        if (mime.endsWith('/rtx') || mime.endsWith('/red') || mime.endsWith('/ulpfec')) return
-        if (prefIsFull ? mime === pref : mime.endsWith('/' + pref)) {
-          used.add(index)
-          ordered.push(codec)
-        }
-      })
+  /**
+   * Transceivers created by the remote offer never go through addTrack(): a peer that only receives would otherwise
+   * never express its preference. setCodecPreferences() must run before createAnswer() to shape the answer.
+   */
+  _createAnswer (): void {
+    this._pc!.getTransceivers?.().forEach(transceiver => {
+      const kind = transceiver.receiver?.track?.kind
+      if (kind === 'audio' || kind === 'video') this._setPreferredCodecs(kind, transceiver)
     })
-
-    capabilities.codecs.forEach((codec, index) => {
-      if (used.has(index)) return
-      ordered.push(codec)
-    })
-
-    transceiver.setCodecPreferences(ordered)
+    super._createAnswer()
   }
 
   _getTransceiverForSender (sender: RTCRtpSender): RTCRtpTransceiver | null {
@@ -242,4 +296,4 @@ class Peer extends Lite {
 export default Peer
 export { Peer }
 export type { PeerLiteOptions, SignalData, AddressInfo, StatsReport } from './lite.js'
-export type { PeerOptions, PreferredCodecs }
+export type { PeerOptions, PreferredCodecs, CodecPreference }

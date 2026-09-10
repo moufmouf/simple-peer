@@ -149,3 +149,82 @@ test('preferredCodecs influences negotiated video codec (getStats)', async funct
   stream1.getTracks().forEach(track => track.stop())
   stream2.getTracks().forEach(track => track.stop())
 })
+
+function browserCanRunCodecTests (): boolean {
+  if (!process.browser) return false
+  if (common.isBrowser('ios')) return false
+  // Playwright WebKit does not support starting the webcam
+  if (common.isBrowser('safari')) return false
+  if (typeof RTCRtpTransceiver === 'undefined') return false
+  if (typeof RTCRtpTransceiver.prototype.setCodecPreferences !== 'function') return false
+  if (typeof RTCRtpReceiver === 'undefined' || typeof RTCRtpReceiver.getCapabilities !== 'function') return false
+  return true
+}
+
+function connect (peer1: Peer, peer2: Peer): void {
+  peer1.on('signal', data => peer2.signal(data))
+  peer2.on('signal', data => peer1.signal(data))
+}
+
+function waitForStream (peer: Peer): Promise<void> {
+  return new Promise<void>(resolve => {
+    peer.once('stream', (stream: MediaStream) => {
+      void attachStreamToVideo(stream)
+      resolve()
+    })
+  })
+}
+
+test('exclusive receive preference restricts both directions', async function () {
+  if (!browserCanRunCodecTests()) return
+
+  const [stream1, stream2] = await Promise.all([getCameraStream(), getCameraStream()])
+
+  // peer1 can only take VP8; peer2 would rather have VP9, but has nothing else to send
+  const peer1 = new Peer({
+    initiator: true,
+    streams: [stream1],
+    receiveCodecs: { video: { prefer: ['video/vp8'], exclusive: true } }
+  })
+  const peer2 = new Peer({
+    streams: [stream2],
+    receiveCodecs: { video: ['video/vp9'] }
+  })
+  connect(peer1, peer2)
+  await Promise.all([waitForStream(peer1), waitForStream(peer2)])
+  await new Promise(resolve => setTimeout(resolve, 500))
+
+  const [codec1, codec2] = await Promise.all([waitForVideoCodec(peer1), waitForVideoCodec(peer2)])
+  expect(codec1).toBe('video/vp8')
+  expect(codec2).toBe('video/vp8')
+
+  peer1.destroy()
+  peer2.destroy()
+  stream1.getTracks().forEach(track => track.stop())
+  stream2.getTracks().forEach(track => track.stop())
+})
+
+test('a peer that only receives still gets its preferred codec', async function () {
+  if (!browserCanRunCodecTests()) return
+
+  const stream1 = await getCameraStream()
+
+  // peer2 adds no track: its transceiver comes from the offer, and its preference must shape the answer
+  const peer1 = new Peer({
+    initiator: true,
+    streams: [stream1],
+    receiveCodecs: { video: ['video/vp9'] }
+  })
+  const peer2 = new Peer({
+    receiveCodecs: { video: ['video/vp8'] }
+  })
+  connect(peer1, peer2)
+  await waitForStream(peer2)
+  await new Promise(resolve => setTimeout(resolve, 500))
+
+  expect(await waitForReceiverVideoCodec(peer2)).toBe('video/vp8')
+
+  peer1.destroy()
+  peer2.destroy()
+  stream1.getTracks().forEach(track => track.stop())
+})
