@@ -14,12 +14,9 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          registry-url: 'https://registry.npmjs.org'
-        if: ${{ steps.release.outputs.release_created }}
-      # Upgrade NPM to latest version
+      # No setup-node on purpose: publishing relies on npm's OIDC trusted publishing (id-token above), and
+      # setup-node's registry-url would write a token-based .npmrc instead. The runner's own Node is used.
+      # Upgrade NPM to latest version (trusted publishing needs a recent npm)
       - run: sudo npm install -g npm
       - uses: google-github-actions/release-please-action@v3
         id: release
@@ -35,7 +32,9 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: 8.8.0
-      - run: pnpm install
+      # Install scripts would build node-datachannel, a native test dependency the runner's Node cannot build
+      # (the prebuild fails on Node 24). Publishing only needs the TypeScript build.
+      - run: pnpm install --ignore-scripts
         if: ${{ steps.release.outputs.release_created }}
       - run: pnpm run build
         if: ${{ steps.release.outputs.release_created }}
