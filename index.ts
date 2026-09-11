@@ -1,7 +1,7 @@
 /*! simple-peer. MIT License. Feross Aboukhadijeh <https://feross.org/opensource> */
 import Lite, { PeerLiteOptions } from './lite.js'
 import errCode from 'err-code'
-import { MediaStream, MediaStreamTrack, RTCRtpReceiver, RTCRtpTransceiver } from 'webrtc-polyfill'
+import { MediaStream, MediaStreamTrack, RTCRtpReceiver, RTCRtpSender, RTCRtpTransceiver } from 'webrtc-polyfill'
 
 /**
  * Codecs a peer prefers to receive for one kind of media, best first ('video/VP9', or just 'VP9').
@@ -32,6 +32,70 @@ interface PeerOptions extends PeerLiteOptions {
 }
 
 const AUXILIARY_CODEC_SUFFIXES = ['/rtx', '/red', '/ulpfec']
+const AUXILIARY_CODEC_NAMES = ['rtx', 'red', 'ulpfec', 'flexfec-03']
+
+type CapabilitiesSource = { getCapabilities?: (kind: string) => RTCRtpCapabilities | null }
+
+/**
+ * Receiver capabilities, which is what setCodecPreferences() takes (a browser may decode codecs it cannot encode).
+ * iOS Safari does not expose the RTCRtpReceiver interface as a global, but the instance's constructor is the
+ * interface all the same; the sender's capabilities are the last resort.
+ */
+function receiverCapabilities (kind: 'audio' | 'video', transceiver: RTCRtpTransceiver): RTCRtpCapabilities | null {
+  const sources: (CapabilitiesSource | undefined)[] = [
+    typeof RTCRtpReceiver === 'undefined' ? undefined : RTCRtpReceiver as CapabilitiesSource,
+    transceiver.receiver?.constructor as CapabilitiesSource | undefined,
+    typeof RTCRtpSender === 'undefined' ? undefined : RTCRtpSender as CapabilitiesSource,
+    transceiver.sender?.constructor as CapabilitiesSource | undefined
+  ]
+  for (const source of sources) {
+    if (typeof source?.getCapabilities === 'function') return source.getCapabilities(kind)
+  }
+  return null
+}
+
+/**
+ * Removes from an SDP every codec of the given kind that is not preferred ('video/H264', or just 'H264'), keeping
+ * the auxiliary rtx/red/ulpfec/flexfec entries. Nothing changes when no preferred codec is present.
+ *
+ * Applied to a remote offer, this is what makes an exclusive preference hold for what we send: a browser sends
+ * the codecs of the remote description, in its order, and setCodecPreferences() only shapes what we advertise
+ * for receiving.
+ */
+export function filterSdpCodecs (sdp: string, kind: 'audio' | 'video', preferred: string[]): string {
+  const names = preferred.map(codec => codec.toLowerCase().split('/').pop()!)
+  const lineEnd = sdp.includes('\r\n') ? '\r\n' : '\n'
+  const lines = sdp.split(lineEnd)
+  const out: string[] = []
+  let index = 0
+  while (index < lines.length) {
+    if (!lines[index].startsWith(`m=${kind} `)) { out.push(lines[index++]); continue }
+    const start = index
+    index++
+    while (index < lines.length && !lines[index].startsWith('m=')) index++
+    const section = lines.slice(start, index)
+    const mLine = section[0].split(' ')
+    const payloadTypes = mLine.slice(3)
+    const nameOf: Record<string, string> = {}
+    const aptOf: Record<string, string> = {}
+    for (const line of section) {
+      const rtpmap = line.match(/^a=rtpmap:(\d+) ([^/]+)\//)
+      if (rtpmap) nameOf[rtpmap[1]] = rtpmap[2].toLowerCase()
+      const apt = line.match(/^a=fmtp:(\d+) .*apt=(\d+)/)
+      if (apt) aptOf[apt[1]] = apt[2]
+    }
+    const keep = new Set(payloadTypes.filter(pt => names.includes(nameOf[pt])))
+    if (keep.size === 0) { out.push(...section); continue }
+    payloadTypes.forEach(pt => { if (AUXILIARY_CODEC_NAMES.includes(nameOf[pt]) && nameOf[pt] !== 'rtx') keep.add(pt) })
+    payloadTypes.forEach(pt => { if (nameOf[pt] === 'rtx' && keep.has(aptOf[pt])) keep.add(pt) })
+    section[0] = [...mLine.slice(0, 3), ...payloadTypes.filter(pt => keep.has(pt))].join(' ')
+    out.push(...section.filter(line => {
+      const attribute = line.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)/)
+      return !attribute || keep.has(attribute[1])
+    }))
+  }
+  return out.join(lineEnd)
+}
 
 function isAuxiliaryCodec (codec: RTCRtpCodecCapability): boolean {
   const mime = codec.mimeType?.toLowerCase() ?? ''
@@ -107,13 +171,25 @@ class Peer extends Lite {
     if (!preference) return
     if ((Array.isArray(preference) ? preference : preference.prefer).length === 0) return
     if (!transceiver?.setCodecPreferences) return
-    // setCodecPreferences() takes receiver capabilities: a browser may decode codecs it cannot encode
-    if (typeof RTCRtpReceiver === 'undefined' || typeof RTCRtpReceiver.getCapabilities !== 'function') return
 
-    const capabilities = RTCRtpReceiver.getCapabilities(kind)
+    const capabilities = receiverCapabilities(kind, transceiver)
     if (!capabilities?.codecs?.length) return
 
     transceiver.setCodecPreferences(orderCodecPreferences(capabilities.codecs, preference))
+  }
+
+  /**
+   * An exclusive preference must also hold for what we send, and a browser sends the codecs of the remote
+   * description: drop the other codecs from it before it is applied.
+   */
+  _transformRemoteSdp (sdp: string): string {
+    for (const kind of ['audio', 'video'] as const) {
+      const preference = this.receiveCodecs?.[kind]
+      if (preference && !Array.isArray(preference) && preference.exclusive && preference.prefer.length > 0) {
+        sdp = filterSdpCodecs(sdp, kind, preference.prefer)
+      }
+    }
+    return sdp
   }
 
   /**

@@ -331,6 +331,7 @@ class Peer extends EventEmitter<PeerEvents> {
       }
     }
     if (parsedData.sdp) {
+      if (this._transformRemoteSdp) parsedData.sdp = this._transformRemoteSdp(parsedData.sdp)
       this._pc!.setRemoteDescription(new RTCSessionDescription(parsedData as RTCSessionDescriptionInit))
         .then(() => {
           if (this.destroyed) return
@@ -1022,6 +1023,7 @@ class Peer extends EventEmitter<PeerEvents> {
   // Optional method to be overridden in subclasses
   addTransceiver? (kind: string, init?: Record<string, unknown>): void
   _requestMissingTransceivers? (): void
+  _transformRemoteSdp? (sdp: string): string
 }
 
 Peer.WEBRTC_SUPPORT = !!RTCPeerConnection

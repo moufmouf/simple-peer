@@ -194,9 +194,40 @@ test('exclusive receive preference restricts both directions', async function ()
   await Promise.all([waitForStream(peer1), waitForStream(peer2)])
   await new Promise(resolve => setTimeout(resolve, 500))
 
-  const [codec1, codec2] = await Promise.all([waitForVideoCodec(peer1), waitForVideoCodec(peer2)])
-  expect(codec1).toBe('video/vp8')
-  expect(codec2).toBe('video/vp8')
+  // Both what each peer receives and, the part setCodecPreferences() alone cannot enforce, what each peer sends
+  const [received1, received2, sent1, sent2] = await Promise.all([
+    waitForReceiverVideoCodec(peer1), waitForReceiverVideoCodec(peer2),
+    waitForSenderVideoCodec(peer1), waitForSenderVideoCodec(peer2)
+  ])
+  expect([received1, received2, sent1, sent2]).toEqual(['video/vp8', 'video/vp8', 'video/vp8', 'video/vp8'])
+
+  peer1.destroy()
+  peer2.destroy()
+  stream1.getTracks().forEach(track => track.stop())
+  stream2.getTracks().forEach(track => track.stop())
+})
+
+test('an exclusive answerer sends only its preferred codec', async function () {
+  if (!browserCanRunCodecTests()) return
+
+  const [stream1, stream2] = await Promise.all([getCameraStream(), getCameraStream()])
+
+  // The offerer asks for VP9; the answerer can only afford VP8 and must not encode what the offer lists first
+  const peer1 = new Peer({
+    initiator: true,
+    streams: [stream1],
+    receiveCodecs: { video: ['video/vp9'] }
+  })
+  const peer2 = new Peer({
+    streams: [stream2],
+    receiveCodecs: { video: { prefer: ['video/vp8'], exclusive: true } }
+  })
+  connect(peer1, peer2)
+  await Promise.all([waitForStream(peer1), waitForStream(peer2)])
+  await new Promise(resolve => setTimeout(resolve, 500))
+
+  const [sent1, sent2] = await Promise.all([waitForSenderVideoCodec(peer1), waitForSenderVideoCodec(peer2)])
+  expect([sent1, sent2]).toEqual(['video/vp8', 'video/vp8'])
 
   peer1.destroy()
   peer2.destroy()
