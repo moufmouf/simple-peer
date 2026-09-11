@@ -1,7 +1,7 @@
 {
   "name": "@workadventure/simple-peer",
   "description": "Simple one-to-one WebRTC video/voice and data channels",
-  "version": "12.2.0",
+  "version": "12.3.0",
   "type": "module",
   "author": {
     "name": "ThaUnknown",
