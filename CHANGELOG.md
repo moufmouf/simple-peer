@@ -1,5 +1,12 @@
 # Changelog
 
+## [12.3.0](https://github.com/workadventure/simple-peer/compare/v12.2.0...v12.3.0) (2026-09-11)
+
+
+### Features
+
+* re-apply codec preferences before every offer, so a changed receiveCodecs takes effect on renegotiation ([79ae303](https://github.com/workadventure/simple-peer/commit/79ae3032cd4130d7e1aa54d5a3931256c38794c0))
+
 ## [12.2.0](https://github.com/workadventure/simple-peer/compare/v12.1.0...v12.2.0) (2026-09-11)
 
 
