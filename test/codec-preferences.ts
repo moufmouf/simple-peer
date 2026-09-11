@@ -84,29 +84,26 @@ async function attachStreamToVideo (stream: MediaStream): Promise<void> {
   }
 }
 
+// A moving canvas: a video source every browser under test has, unlike a webcam
 async function getCameraStream (): Promise<MediaStream> {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error('getUserMedia is not available in this browser')
+  const canvas = document.createElement('canvas')
+  canvas.width = 320
+  canvas.height = 180
+  const context = canvas.getContext('2d')!
+  const paint = (): void => {
+    context.fillStyle = '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')
+    context.fillRect(0, 0, canvas.width, canvas.height)
   }
-  return await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+  paint()
+  setInterval(paint, 50)
+  return canvas.captureStream(15)
 }
 
 test('preferredCodecs influences negotiated video codec (getStats)', async function () {
-  if (!process.browser) return
-  if (common.isBrowser('ios')) return
-  // Playwright WebKit does not support starting the webcam
-  if (common.isBrowser('safari')) return
-  if (typeof RTCRtpTransceiver === 'undefined') return
-  if (typeof RTCRtpTransceiver.prototype.setCodecPreferences !== 'function') return
-  if (typeof RTCRtpSender === 'undefined' || typeof RTCRtpSender.getCapabilities !== 'function') return
-  if (typeof RTCRtpReceiver === 'undefined' || typeof RTCRtpReceiver.getCapabilities !== 'function') return
+  if (!browserCanRunCodecTests() || !browserHonoursCodecOrder()) return
   const preferred = ['video/vp9']
-
-  const senderCaps = RTCRtpSender.getCapabilities('video')
   const receiverCaps = RTCRtpReceiver.getCapabilities('video')
-  const supportsVp9 = senderCaps?.codecs?.some(codec => codec.mimeType?.toLowerCase() === 'video/vp9') &&
-    receiverCaps?.codecs?.some(codec => codec.mimeType?.toLowerCase() === 'video/vp9')
-  if (!supportsVp9) return
+  if (!receiverCaps?.codecs?.some(codec => codec.mimeType?.toLowerCase() === 'video/vp9')) return
 
   const [stream1, stream2] = await Promise.all([getCameraStream(), getCameraStream()])
 
@@ -150,11 +147,14 @@ test('preferredCodecs influences negotiated video codec (getStats)', async funct
   stream2.getTracks().forEach(track => track.stop())
 })
 
+// Linux WebKit's GStreamer WebRTC backend keeps the codec order it likes whatever setCodecPreferences() says;
+// iOS Safari runs libwebrtc and does honour it. Tests that depend on the order skip there.
+function browserHonoursCodecOrder (): boolean {
+  return !common.isBrowser('safari') && !common.isBrowser('ios')
+}
+
 function browserCanRunCodecTests (): boolean {
   if (!process.browser) return false
-  if (common.isBrowser('ios')) return false
-  // Playwright WebKit does not support starting the webcam
-  if (common.isBrowser('safari')) return false
   if (typeof RTCRtpTransceiver === 'undefined') return false
   if (typeof RTCRtpTransceiver.prototype.setCodecPreferences !== 'function') return false
   if (typeof RTCRtpReceiver === 'undefined' || typeof RTCRtpReceiver.getCapabilities !== 'function') return false
@@ -176,7 +176,7 @@ function waitForStream (peer: Peer): Promise<void> {
 }
 
 test('exclusive receive preference restricts both directions', async function () {
-  if (!browserCanRunCodecTests()) return
+  if (!browserCanRunCodecTests() || !browserHonoursCodecOrder()) return
 
   const [stream1, stream2] = await Promise.all([getCameraStream(), getCameraStream()])
 
@@ -236,7 +236,7 @@ test('an exclusive answerer sends only its preferred codec', async function () {
 })
 
 test('a peer that only receives still gets its preferred codec', async function () {
-  if (!browserCanRunCodecTests()) return
+  if (!browserCanRunCodecTests() || !browserHonoursCodecOrder()) return
 
   const stream1 = await getCameraStream()
 
