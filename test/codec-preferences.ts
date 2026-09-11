@@ -259,3 +259,44 @@ test('a peer that only receives still gets its preferred codec', async function 
   peer2.destroy()
   stream1.getTracks().forEach(track => track.stop())
 })
+
+async function waitForSenderVideoCodecToBe (peer: Peer, expected: string, timeoutMs = 8000): Promise<string> {
+  const start = Date.now()
+  let last = ''
+  while (Date.now() - start < timeoutMs) {
+    last = await waitForSenderVideoCodec(peer, timeoutMs)
+    if (last === expected) return last
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  return last
+}
+
+// A changed preference takes effect on renegotiation, whether the initiator or the other peer changes it
+for (const changer of ['initiator', 'non-initiator'] as const) {
+  test(`a changed receiveCodecs applies to both directions when the ${changer} renegotiates`, async function () {
+    if (!browserCanRunCodecTests() || !browserHonoursCodecOrder()) return
+
+    const [stream1, stream2] = await Promise.all([getCameraStream(), getCameraStream()])
+    const both = { video: { prefer: ['video/vp9', 'video/vp8'], exclusive: true } }
+    const peer1 = new Peer({ initiator: true, streams: [stream1], receiveCodecs: both })
+    const peer2 = new Peer({ streams: [stream2], receiveCodecs: both })
+    connect(peer1, peer2)
+    await Promise.all([waitForStream(peer1), waitForStream(peer2)])
+    await new Promise(resolve => setTimeout(resolve, 500))
+    expect(await waitForSenderVideoCodecToBe(peer1, 'video/vp9')).toBe('video/vp9')
+    expect(await waitForSenderVideoCodecToBe(peer2, 'video/vp9')).toBe('video/vp9')
+
+    // One peer can no longer afford VP9: both must fall back to VP8
+    const peer = changer === 'initiator' ? peer1 : peer2
+    peer.receiveCodecs = { video: { prefer: ['video/vp8'], exclusive: true } }
+    peer.negotiate()
+
+    expect(await waitForSenderVideoCodecToBe(peer1, 'video/vp8')).toBe('video/vp8')
+    expect(await waitForSenderVideoCodecToBe(peer2, 'video/vp8')).toBe('video/vp8')
+
+    peer1.destroy()
+    peer2.destroy()
+    stream1.getTracks().forEach(track => track.stop())
+    stream2.getTracks().forEach(track => track.stop())
+  })
+}

@@ -192,15 +192,28 @@ class Peer extends Lite {
     return sdp
   }
 
+  _applyPreferredCodecsToAllTransceivers (): void {
+    this._pc!.getTransceivers?.().forEach(transceiver => {
+      const kind = transceiver.receiver?.track?.kind
+      if (kind === 'audio' || kind === 'video') this._setPreferredCodecs(kind, transceiver)
+    })
+  }
+
+  /**
+   * Preferences are applied to a transceiver when it is created. A renegotiation reuses the transceivers, so they
+   * are applied again before every offer: changing `receiveCodecs` then calling `negotiate()` takes effect.
+   */
+  _createOffer (): void {
+    this._applyPreferredCodecsToAllTransceivers()
+    super._createOffer()
+  }
+
   /**
    * Transceivers created by the remote offer never go through addTrack(): a peer that only receives would otherwise
    * never express its preference. setCodecPreferences() must run before createAnswer() to shape the answer.
    */
   _createAnswer (): void {
-    this._pc!.getTransceivers?.().forEach(transceiver => {
-      const kind = transceiver.receiver?.track?.kind
-      if (kind === 'audio' || kind === 'video') this._setPreferredCodecs(kind, transceiver)
-    })
+    this._applyPreferredCodecsToAllTransceivers()
     super._createAnswer()
   }
 
