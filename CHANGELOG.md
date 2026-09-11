@@ -1,5 +1,12 @@
 # Changelog
 
+## [12.2.0](https://github.com/workadventure/simple-peer/compare/v12.1.0...v12.2.0) (2026-09-11)
+
+
+### Features
+
+* make exclusive codec preferences hold for what we send, and find capabilities on iOS ([0e2e6b9](https://github.com/workadventure/simple-peer/commit/0e2e6b9d3b001179f0c13efaacd33d4586735361))
+
 ## [12.1.0](https://github.com/workadventure/simple-peer/compare/v12.0.1...v12.1.0) (2026-09-10)
 
 
